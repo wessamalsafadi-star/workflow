@@ -44,10 +44,10 @@ def sync_jobs():
     active_ids = {c["id"] for c in campaigns if c["active"]}
 
     # Build current job map
-    existing = {int(j.id): j for j in sched.get_jobs()
-                if j.id.startswith("campaign_")}
-    existing_ids = {int(jid.replace("campaign_", ""))
-                    for jid in existing}
+    existing = {j.id: j for j in sched.get_jobs()
+            if j.id.startswith("campaign_")}
+existing_ids = {int(jid.replace("campaign_", ""))
+                for jid in existing}
 
     # Remove deactivated jobs
     for cid in existing_ids - active_ids:
