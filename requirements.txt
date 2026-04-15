@@ -2,3 +2,4 @@ streamlit
 apscheduler
 requests
 pandas
+psycopg2-binary
