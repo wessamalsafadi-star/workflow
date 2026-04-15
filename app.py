@@ -660,7 +660,7 @@ elif "Run Logs" in page:
             return colors.get(val, "")
 
         st.dataframe(
-            df.style.applymap(color_status, subset=["Status"])
+            df.style.map(color_status, subset=["Status"])
             if "Status" in df.columns else df,
             use_container_width=True,
             hide_index=True,
