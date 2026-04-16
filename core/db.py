@@ -42,6 +42,7 @@ def init_db():
                 end_hour    INTEGER NOT NULL DEFAULT 17,
                 timezone    TEXT NOT NULL DEFAULT 'Asia/Dubai',
                 active      INTEGER NOT NULL DEFAULT 0,
+                last_page   INTEGER NOT NULL DEFAULT 1,
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL
             );
@@ -68,6 +69,10 @@ def init_db():
                 PRIMARY KEY (campaign_id, date_str)
             );
             """)
+            # Migrate existing deployments that don't have last_page yet
+            cur.execute("""
+                ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS last_page INTEGER NOT NULL DEFAULT 1;
+            """)
 
 
 def save_campaign(name, query_json, ac_tag_id, ac_auto_id,
@@ -90,8 +95,8 @@ def save_campaign(name, query_json, ac_tag_id, ac_auto_id,
                     INSERT INTO campaigns
                         (name, query_json, ac_tag_id, ac_auto_id,
                          drip_limit, start_hour, end_hour, timezone,
-                         active, created_at, updated_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,0,%s,%s)
+                         active, last_page, created_at, updated_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,0,1,%s,%s)
                 """, (name, json.dumps(query_json), ac_tag_id, ac_auto_id,
                       drip_limit, start_hour, end_hour, timezone, now, now))
 
@@ -123,6 +128,22 @@ def set_active(campaign_id, active: bool):
         with conn.cursor() as cur:
             cur.execute("UPDATE campaigns SET active=%s WHERE id=%s",
                         (1 if active else 0, campaign_id))
+
+
+def set_last_page(campaign_id, page: int):
+    """Save the last successfully processed page for a campaign."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE campaigns SET last_page=%s WHERE id=%s",
+                        (page, campaign_id))
+
+
+def reset_last_page(campaign_id):
+    """Reset pagination back to page 1 (e.g. when all pages are exhausted)."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE campaigns SET last_page=1 WHERE id=%s",
+                        (campaign_id,))
 
 
 def start_run(campaign_id, campaign_name):
