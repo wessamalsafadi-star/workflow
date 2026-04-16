@@ -1,6 +1,7 @@
 """
 runner.py — Core automation logic
 Fetches leads from Cencorp CRM page-by-page and enrolls them in ActiveCampaign.
+Remembers the last processed page across runs so it never re-processes leads.
 """
 import requests
 import json
@@ -11,7 +12,8 @@ from zoneinfo import ZoneInfo
 
 from .db import (
     get_campaign, start_run, finish_run,
-    get_today_enrolled, increment_today_enrolled
+    get_today_enrolled, increment_today_enrolled,
+    set_last_page, reset_last_page
 )
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,6 @@ CENCORP_LEADS  = f"{CENCORP_BASE}/properties/leads"
 
 AC_BASE        = "https://bhomes.api-us1.com/api/3"
 AC_TOKEN       = "10474935eaa36cb34609a1930d72444bb650c23fe8b83a0908b576f9ad655c11adf9a59a"
-CENCORP_TOKEN  = "Bearer Auth account 2"   # placeholder — set via env or UI
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -144,8 +145,10 @@ def run_campaign(campaign_id: int, progress_callback=None):
     Execute one campaign run:
       1. Check schedule window
       2. Check daily drip cap
-      3. Paginate Cencorp, process each lead
-      4. Log results
+      3. Resume from last saved page, paginate Cencorp, process each lead
+      4. Save page progress after each page
+      5. Reset to page 1 when all pages are exhausted
+      6. Log results
     Returns a summary dict.
     """
     campaign = get_campaign(campaign_id)
@@ -174,8 +177,11 @@ def run_campaign(campaign_id: int, progress_callback=None):
     run_id = start_run(campaign_id, campaign["name"])
     query = json.loads(campaign["query_json"])
 
+    # ── Resume from last saved page ───────────────────────────────────────────
+    page = campaign.get("last_page", 1)
+    logger.info("Campaign %s: resuming from page %d", campaign["name"], page)
+
     stats = {"leads_fetched": 0, "enrolled": 0, "skipped": 0, "errors": 0}
-    page = 1
     total_pages = None
 
     try:
@@ -184,7 +190,8 @@ def run_campaign(campaign_id: int, progress_callback=None):
             today_enrolled = get_today_enrolled(campaign_id)
             remaining = campaign["drip_limit"] - today_enrolled
             if remaining <= 0:
-                logger.info("Drip cap hit mid-run. Stopping.")
+                logger.info("Drip cap hit mid-run. Stopping at page %d.", page)
+                set_last_page(campaign_id, page)
                 break
 
             if progress_callback:
@@ -204,6 +211,9 @@ def run_campaign(campaign_id: int, progress_callback=None):
             stats["leads_fetched"] += len(leads)
 
             if not leads:
+                # No more leads — reset to page 1 for next cycle
+                logger.info("Campaign %s: all pages exhausted. Resetting to page 1.", campaign["name"])
+                reset_last_page(campaign_id)
                 break
 
             for lead in leads:
@@ -246,10 +256,20 @@ def run_campaign(campaign_id: int, progress_callback=None):
                     stats["errors"] += 1
                     continue
 
-            # ── Pagination ────────────────────────────────────────────────
-            if page >= total_pages or stats["enrolled"] >= remaining:
+            # ── Save page progress ────────────────────────────────────────
+            if page >= total_pages:
+                # Reached the last page — reset for next cycle
+                logger.info("Campaign %s: reached last page %d. Resetting to page 1.", campaign["name"], page)
+                reset_last_page(campaign_id)
                 break
-            page += 1
+            elif stats["enrolled"] >= remaining:
+                # Drip cap hit — save current page to resume tomorrow
+                set_last_page(campaign_id, page + 1)
+                break
+            else:
+                # More pages to go — save progress and continue
+                set_last_page(campaign_id, page + 1)
+                page += 1
 
         finish_run(run_id, status="completed", **stats,
                    message=f"Completed page {page}/{total_pages or '?'}")
